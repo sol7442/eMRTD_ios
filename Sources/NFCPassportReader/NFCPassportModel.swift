@@ -222,6 +222,48 @@ public class NFCPassportModel {
         if id != .COM && id != .SOD {
             self.dataGroupsAvailable.append( id )
         }
+        
+        if id == .DG1 {
+            if let dg1 = dataGroup as? DataGroup1 {
+                Logger.passportReader.info("[KISA_DG1] DG1File read")
+
+                if let mrzInfo = dg1.elements["5F1F"] { // MRZ 정보 추출
+                    Logger.passportReader.info("[KISA_DG1] MRZ Info: \(mrzInfo)")
+                }
+
+                // MRZInfo 필드 값 출력 (문서 번호, 만료일, 생년월일, 국적, 이름)
+                Logger.passportReader.info("[KISA_DG1] Document Number: \(dg1.elements["5A"] ?? "Unknown")")
+                Logger.passportReader.info("[KISA_DG1] Date of Expiry: \(dg1.elements["59"] ?? "Unknown")")
+                Logger.passportReader.info("[KISA_DG1] Date of Birth: \(dg1.elements["5F57"] ?? "Unknown")")
+                Logger.passportReader.info("[KISA_DG1] Nationality: \(dg1.elements["5F2C"] ?? "Unknown")")
+                Logger.passportReader.info("[KISA_DG1] Name: \((dg1.elements["5B"] ?? "Unknown").replacingOccurrences(of: "<<", with: " "))")
+            }
+        }
+        
+        if id == .DG2 {
+            if let dg2 = dataGroup as? DataGroup2 {
+                Logger.passportReader.info("[KISA_DG2] DG2File read")
+
+                // 얼굴 이미지 개수 출력 (DataGroup2에는 해당 정보가 없으므로, 이미지 데이터 존재 여부로 판단)
+                let faceImageCount = dg2.imageData.isEmpty ? 0 : 1
+                Logger.passportReader.info("[KISA_DG2] Number of FaceInfos: \(faceImageCount)")
+
+                if !dg2.imageData.isEmpty {
+                    // FaceInfo 객체의 해시 값 출력 (단일 이미지라고 가정)
+                    do {
+                        guard let sod = self.dataGroupsRead[.SOD] as? SOD else {
+                            throw NFCPassportReaderError.DataGroupNotRead
+                        }
+                        let digestAlgorithm = try sod.getEncapsulatedContentDigestAlgorithm()
+                        let faceInfoHash = try calcHash(data: dg2.imageData, hashAlgorithm: digestAlgorithm)
+                        Logger.passportReader.debug("[KISA_DG2] FaceInfo Hash: \(binToHexRep(faceInfoHash))")
+                    } catch {
+                        Logger.passportReader.error("Failed to calculate FaceInfo hash: \(error.localizedDescription)")
+                    }
+                }
+            }
+        }
+        
     }
 
     public func getDataGroup( _ id : DataGroupId ) -> DataGroup? {
@@ -429,7 +471,56 @@ public class NFCPassportModel {
         guard let sod = getDataGroup(.SOD) as? SOD else {
             throw PassiveAuthenticationError.SODMissing("No SOD found" )
         }
+        
+         Logger.passportReader.info("[KISA_SOD] SODFile read")
 
+         // SODFile 필드 값 출력 (다이제스트 알고리즘, 서명 알고리즘, LDS/유니코드 버전, 발급자, 일련 번호)
+         do {
+             let signedData = try useCMSVerification
+                 ? OpenSSLUtils.verifyAndReturnSODEncapsulatedDataUsingCMS(sod: sod)
+                 : OpenSSLUtils.verifyAndReturnSODEncapsulatedData(sod: sod)
+
+             let asn1Data = try OpenSSLUtils.ASN1Parse(data: signedData)
+             let (sodHashAlgorithm, sodHashes) = try parseSODSignatureContent(asn1Data)
+
+             Logger.passportReader.info("[KISA_SOD] Digest Algorithm: \(sodHashAlgorithm)")
+ //            Logger.passportReader.info("[KISA_SOD] Digest Encryption Algorithm: \(try sod.getSignatureAlgorithm())") // 서명 알고리즘 추출
+             var signatureAlgorithm = "Unknown" // 기본값 설정
+             do {
+                signatureAlgorithm = try sod.getSignatureAlgorithm()
+             } catch {
+                Logger.passportReader.error("Failed to get signature algorithm: \(error.localizedDescription)")
+             }
+             Logger.passportReader.info("[KISA_SOD] Digest Encryption Algorithm: \(signatureAlgorithm)")
+             
+             if let ldsVersion = (dataGroupsRead[.COM] as? COM)?.version {
+                 Logger.passportReader.info("[KISA_SOD] LDS Version: \(ldsVersion)")
+             }
+
+             if let unicodeVersion = (dataGroupsRead[.COM] as? COM)?.unicodeVersion {
+                 Logger.passportReader.info("[KISA_SOD] Unicode Version: \(unicodeVersion)")
+             }
+
+             if let docSigningCert = self.documentSigningCertificate {
+                 Logger.passportReader.info("[KISA_SOD] Document Signing Certificate Issuer: \(docSigningCert.getIssuerName() ?? "Unknown")")
+                 Logger.passportReader.info("[KISA_SOD] Document Signing Certificate Serial Number: \(docSigningCert.getSerialNumber() ?? "Unknown")")
+             } else {
+                 Logger.passportReader.warning("[KISA_SOD] Document Signing Certificate not found")
+             }
+
+             // 데이터 그룹 해시 값 출력
+             for (dgId, hashValue) in sodHashes {
+                 Logger.passportReader.info("[KISA_SOD] Data Group \(dgId.getName()) Hash: \(binToHexRep(hexRepToBin(hashValue)))")
+             }
+
+             // 암호화된 다이제스트 값 출력
+             let encryptedDigest = try sod.getSignature() // 암호화된 다이제스트는 서명 데이터라고 가정
+             Logger.passportReader.info("[KISA_SOD] Encrypted Digest: \(binToHexRep([UInt8](encryptedDigest)))")
+         } catch {
+             // 에러 로깅 (선택 사항)
+             Logger.passportReader.error("Failed to parse SOD data: \(error.localizedDescription)")
+         }
+        
         // Get SOD Content and verify that its correctly signed by the Document Signing Certificate
         var signedData : Data
         documentSigningCertificateVerified = false
@@ -462,6 +553,10 @@ public class NFCPassportModel {
             
             let computedHashVal = binToHexRep(dgVal.hash(sodHashAlgorythm))
             
+             // --- 로그 추가 (KISA_MRTD) ---
+             Logger.passportReader.info("[KISA_PA] DG \(id.getName()) SOD Digest: \(sodHashVal)")
+             Logger.passportReader.info("[KISA_PA] DG \(id.getName()) Gen Digest: \(computedHashVal)")
+
             var match = true
             if computedHashVal != sodHashVal {
                 errors += "\(id) invalid hash:\n  SOD hash:\(sodHashVal)\n   Computed hash:\(computedHashVal)\n"

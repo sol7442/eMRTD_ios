@@ -221,7 +221,18 @@ extension PassportReader {
                 Logger.passportReader.debug( "Read CardAccess - data \(binToHexRep(data))" )
                 let cardAccess = try CardAccess(data)
                 passport.cardAccess = cardAccess
-     
+                
+                Logger.passportReader.info("[KISA_ACL] CardAccessFile read")
+                Logger.passportReader.info("[KISA_ACL] Available SecurityInfos: \(cardAccess.securityInfos)")
+
+                for securityInfo in cardAccess.securityInfos {
+                    if let paceInfo = securityInfo as? PACEInfo {
+                        Logger.chipAuth.info("[KISA_PACE] PACEInfo: protocolOID=\(paceInfo.getObjectIdentifier()), version=\(paceInfo.getVersion()), parameterId=\(paceInfo.getParameterId() ?? -1)") // 수정된 부분
+                    } else { // BACInfo인 경우
+                        Logger.passportReader.info("[KISA_BAC] BACInfo: protocolOID=\(securityInfo.getObjectIdentifier())")
+                    }
+                }
+      
                 Logger.passportReader.info( "Starting Password Authenticated Connection Establishment (PACE)" )
                  
                 let paceHandler = try PACEHandler( cardAccess: cardAccess, tagReader: tagReader )
@@ -295,6 +306,20 @@ extension PassportReader {
         if let com = try await readDataGroup(tagReader:tagReader, dgId:.COM) as? COM {
             self.passport.addDataGroup( .COM, dataGroup:com )
         
+            
+            Logger.passportReader.info("[KISA_COMFile] COMFile read") // comFile.toString() 메서드 없음
+
+            // COMFile 필드 값 출력 (LDS 버전, Unicode 버전, 태그 목록)
+            Logger.passportReader.info("[KISA_COMFile] LDS Version: \(com.version)")
+            Logger.passportReader.info("[KISA_COMFile] Unicode Version: \(com.unicodeVersion)")
+            Logger.passportReader.info("[KISA_COMFile] Tag List: \(com.dataGroupsPresent)") // dataGroupsPresent는 이미 문자열 배열
+
+            // 각 데이터 그룹 존재 여부 확인
+            for tagName in com.dataGroupsPresent {
+                let dgId = DataGroupId.getIDFromName(name: tagName)
+                Logger.passportReader.info("[KISA_COMFile] Data Group \(dgId.getName()) (Tag \(String(format: "%02X", UInt8(dgId.rawValue))): Present")
+            }
+            
             // SOD and COM shouldn't be present in the DG list but just in case (worst case here we read the sod twice)
             DGsToRead = [.SOD] + com.dataGroupsPresent.map { DataGroupId.getIDFromName(name:$0) }
             DGsToRead.removeAll { $0 == .COM }
@@ -307,6 +332,23 @@ extension PassportReader {
                 // Do Chip Authentication
                 if let dg14 = try await readDataGroup(tagReader:tagReader, dgId:.DG14) as? DataGroup14 {
                     self.passport.addDataGroup( .DG14, dataGroup:dg14 )
+                    Logger.chipAuth.info("[KISA_CA] DG14File read")
+                    Logger.chipAuth.info("[KISA_CA] Available SecurityInfos: \(dg14.securityInfos)")
+
+                    for securityInfo in dg14.securityInfos {
+                        let oid = securityInfo.getObjectIdentifier()
+                        Logger.chipAuth.info("[KISA_CA] SecurityInfo: protocolOID=\(oid)")
+
+                        if let publicKeyInfo = securityInfo as? ChipAuthenticationPublicKeyInfo {
+                            Logger.chipAuth.info("[KISA_CA] ChipAuthenticationPublicKeyInfo: keyId=\(publicKeyInfo.getKeyId()), publicKey=\(OpenSSLUtils.pubKeyToPEM(pubKey: publicKeyInfo.pubKey))") // OpenSSLUtils.pubKeyToPEM 사용
+                        } else if let authInfo = securityInfo as? ChipAuthenticationInfo {
+                            Logger.chipAuth.info("[KISA_CA] ChipAuthenticationInfo: keyId=\(authInfo.getKeyId())")
+                        } else if let paceInfo = securityInfo as? PACEInfo {
+                            Logger.chipAuth.info("[KISA_CA] PACEInfo: version=\(paceInfo.getVersion()), parameterId=\(paceInfo.getParameterId() ?? -1)")
+                        } else if let aaInfo = securityInfo as? ActiveAuthenticationInfo {
+                            Logger.chipAuth.info("[KISA_CA] ActiveAuthenticationInfo: signatureAlgorithmOID=\(aaInfo.getSignatureAlgorithmOIDString() ?? "")")
+                        }
+                    }
                     let caHandler = ChipAuthenticationHandler(dg14: dg14, tagReader: tagReader)
                      
                     if caHandler.isChipAuthenticationSupported {

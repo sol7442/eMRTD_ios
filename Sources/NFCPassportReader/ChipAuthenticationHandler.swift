@@ -127,6 +127,14 @@ class ChipAuthenticationHandler {
         // (the passport with do the same thing with their private key and our public key)
         let sharedSecret = OpenSSLUtils.computeSharedSecret(privateKeyPair:ephemeralKeyPair!, publicKey:publicKey)
         
+        do {
+            // EACCAResult를 직접 사용할 수 없으므로, secureMessaging 성공 여부로 판단
+            try restartSecureMessaging(oid: oid, sharedSecret: sharedSecret, maxTranceiveLength: 1, shouldCheckMAC: true)
+            Logger.chipAuth.info("[KISA_CA] Chip Authentication successful")
+        } catch {
+            Logger.chipAuth.error("[KISA_CA] Chip Authentication failed: \(error.localizedDescription)")
+            throw error // 오류 전파
+        }
         // Now try to restart Secure Messaging using the new shared secret and
         try restartSecureMessaging( oid : oid, sharedSecret : sharedSecret, maxTranceiveLength : 1, shouldCheckMAC : true)
     }

@@ -58,8 +58,19 @@ public class BACHandler {
         guard maResponse.data.count > 0 else {
             throw NFCPassportReaderError.InvalidMRZKey
         }
-        
+
+        // --- 로그 추가 위치 ---
         let (KSenc, KSmac, ssc) = try self.sessionKeys(data: [UInt8](maResponse.data))
+        if !KSenc.isEmpty && !KSmac.isEmpty && !ssc.isEmpty { // 세션 키 생성 성공 여부 확인
+            Logger.bac.info("[KISA_BAC] BAC authentication successful")
+
+            // BACResult 정보 로깅 (BACResult 객체가 없으므로, 관련 정보를 직접 출력)
+            Logger.bac.info("[KISA_BAC] BAC Key: \(mrzKey)") // BAC 키는 mrzKey와 동일하다고 가정
+        } else {
+            Logger.bac.error("[KISA_BAC] BAC authentication failed")
+        }
+        // --- 로그 추가 위치 ---
+        
         tagReader.secureMessaging = SecureMessaging(ksenc: KSenc, ksmac: KSmac, ssc: ssc)
         Logger.bac.debug( "BACHandler - complete" )
     }
@@ -67,6 +78,11 @@ public class BACHandler {
 
     func deriveDocumentBasicAccessKeys(mrz: String) throws -> ([UInt8], [UInt8]) {
         let kseed = generateInitialKseed(kmrz:mrz)
+        
+        Logger.bac.log(level: .info, "[KISA_BACKey] BACKey created")
+
+        // 계산된 키 시드 출력 (SHA-1 해시 값)
+        Logger.bac.info("[KISA_BACKey] Key Seed (SHA-1): \(binToHexRep(kseed))") // kseed 변수 사용
     
         Logger.bac.debug("Calculate the Basic Access Keys (Kenc and Kmac) using TR-SAC 1.01, 4.2")
         let smskg = SecureMessagingSessionKeyGenerator()

@@ -266,6 +266,12 @@ public class OpenSSLUtils {
             // Invalid - signed data hash doesn't match message digest hash
             throw OpenSSLError.VerifyAndReturnSODEncapsulatedData("messageDigest Hash doesn't hatch that of the signed attributes")
         }
+        // Verify signed attributes
+        let signatureVerificationResult = verifySignature(data: [UInt8](signedAttributes), signature: [UInt8](signature), pubKey: pubKey, digestType: sigType)
+        Logger.passportReader.info("[KISA_PA] Signature Algorithm: \(sigType)") // 서명 알고리즘
+        Logger.passportReader.info("[KISA_PA] EContent : \(binToHexRep([UInt8](encapsulatedContent)))")
+        Logger.passportReader.info("[KISA_PA] Encrypted Digest: \(binToHexRep([UInt8](signature)))")
+        Logger.passportReader.info("[KISA_PA] Signature Verification Result: \(signatureVerificationResult)") // 검증 결과
         
         // Verify signed attributes
         if  !verifySignature( data : [UInt8](signedAttributes), signature : [UInt8](signature), pubKey : pubKey, digestType: sigType ) {

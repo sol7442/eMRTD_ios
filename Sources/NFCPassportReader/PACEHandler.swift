@@ -110,6 +110,20 @@ public class PACEHandler {
         let ephemeralParams = try await self.doStep2(passportNonce: decryptedNonce)
         let (ephemeralKeyPair, passportPublicKey) = try await self.doStep3KeyExchange(ephemeralParams: ephemeralParams)
         let (encKey, macKey) = try await self.doStep4KeyAgreement( pcdKeyPair: ephemeralKeyPair, passportPublicKey: passportPublicKey)
+        
+         if tagReader.secureMessaging != nil { // secureMessaging이 설정되어 있으면 PACE 성공으로 간주
+             Logger.pace.info("[KISA_PACE] PACE authentication successful")
+
+             // 추가적인 PACEInfo 정보 로깅 (선택 사항)
+             Logger.pace.info("[KISA_PACE] PACE Mapping Type: \(self.mappingType!.description()))")
+             Logger.pace.info("[KISA_PACE] PACE Agreement Algorithm: \(self.agreementAlg)")
+             Logger.pace.info("[KISA_PACE] PACE Cipher Algorithm: \(self.cipherAlg)")
+             Logger.pace.info("[KISA_PACE] PACE Digest Algorithm: \(self.digestAlg)")
+             Logger.pace.info("[KISA_PACE] PACE Key Length: \(self.keyLength)")
+         } else {
+             Logger.pace.error("[KISA_PACE] PACE authentication failed")
+         }
+        
         try self.paceCompleted( ksEnc: encKey, ksMac: macKey )
         Logger.pace.debug("PACE SUCCESSFUL" )
     }
